@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI PDF Renamer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#4F46E5',
+                        secondary: '#E0E7FF',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif;
+            background-color: #f3f4f6;
+        }
+        .drop-zone {
+            transition: all 0.3s ease;
+            background-image: url("data:image/svg+xml,%3csvg width='100%25' height='100%25' xmlns='http://www.w3.org/2000/svg'%3e%3crect width='100%25' height='100%25' fill='none' rx='20' ry='20' stroke='%234F46E5FF' stroke-width='2' stroke-dasharray='12%2c 12' stroke-dashoffset='0' stroke-linecap='square'/%3e%3c/svg%3e");
+        }
+        .drop-zone.dragover {
+            background-color: #E0E7FF;
+            transform: scale(1.02);
+        }
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col text-slate-700">
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm sticky top-0 z-10">
+        <div class="max-w-4xl mx-auto px-4 py-4 flex flex-wrap justify-between items-center gap-4">
+            <h1 class="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <i class="fa-solid fa-robot text-primary"></i>
+                AI PDF Renamer
+            </h1>
+            <div class="flex flex-col items-end gap-1">
+                <div class="flex flex-wrap items-center gap-2">
+                    <!-- Date Picker -->
+                    <div class="flex items-center bg-white border border-slate-300 rounded-lg px-3 py-1.5 shadow-sm" title="ファイル名に付与する日付">
+                        <i class="fa-regular fa-calendar text-slate-400 mr-2"></i>
+                        <input type="date" id="globalDatePicker" class="text-sm text-slate-700 focus:outline-none bg-transparent cursor-pointer font-medium">
+                    </div>
+
+                    <button id="downloadAllBtn" class="hidden bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition flex items-center gap-2 text-sm font-medium shadow-sm">
+                        <i class="fa-solid fa-file-zipper"></i> ZIP保存
+                    </button>
+                    <button id="settingsBtn" class="text-slate-500 hover:text-primary transition-colors p-2" title="設定">
+                        <i class="fa-solid fa-gear text-xl"></i>
+                    </button>
+                </div>
+                <!-- Cost Display -->
+                <div id="costDisplay" class="text-[10px] text-slate-400 font-mono tracking-tighter cursor-help" title="今回のセッションでのAPI利用料概算">
+                    概算コスト: 0.000円
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-grow container max-w-4xl mx-auto px-4 py-8">
+        
+        <!-- Settings Modal (Hidden by default) -->
+        <div id="settingsPanel" class="hidden mb-6 bg-white p-6 rounded-xl shadow-sm border border-slate-200 animate-fade-in max-h-[80vh] overflow-y-auto">
+            <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">
+                <i class="fa-solid fa-sliders text-slate-400"></i> 設定
+            </h2>
+            
+            <!-- Provider Selection -->
+            <div class="mb-4">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">APIプロバイダー</label>
+                <div class="flex gap-4">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="apiProvider" value="google" class="text-primary focus:ring-primary">
+                        <span class="text-sm">Google Gemini (Direct)</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="apiProvider" value="openrouter" class="text-primary focus:ring-primary" checked>
+                        <span class="text-sm">OpenRouter</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- API Key -->
+            <div class="mb-4">
+                <label id="apiKeyLabel" class="block text-xs font-bold text-slate-500 uppercase mb-1">OpenRouter API Key</label>
+                <input type="password" id="apiKeyInput" placeholder="sk-or-v1-..." class="w-full p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm">
+                <p id="apiKeyHelp" class="text-xs text-slate-400 mt-1">OpenRouterのダッシュボードから取得したキーを入力してください。</p>
+            </div>
+
+            <!-- Model Selection -->
+            <div class="mb-4">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">使用モデル</label>
+                <select id="modelSelect" class="w-full p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm bg-white">
+                    <!-- Options will be populated by JS -->
+                </select>
+                <p id="modelDescription" class="text-xs text-slate-400 mt-1">最新の高速モデルです。コストパフォーマンスに優れています。</p>
+            </div>
+
+            <hr class="border-slate-100 my-4">
+
+            <!-- Contract Mode Toggle -->
+            <div class="mb-4 bg-indigo-50 p-3 rounded-lg border border-indigo-100">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="contractModeCheck" class="w-4 h-4 text-primary rounded focus:ring-primary">
+                    <span class="font-bold text-sm text-indigo-900">契約書モードを有効にする</span>
+                </label>
+                <p class="text-xs text-indigo-700 mt-1 pl-6">
+                    有効にすると、以下の形式でリネームします：<br>
+                    <code>相手会社名_契約書名_契約日</code><br>
+                    ※自社名（船昌など）はファイル名に含めず、別途表示します。<br>
+                    <strong>※ZIP保存時、自社名ごとにフォルダ分けされます。</strong>
+                </p>
+            </div>
+
+            <!-- Date Suffix Settings -->
+            <div class="mb-6" id="dateSettingsArea">
+                <label class="block text-xs font-bold text-slate-500 uppercase mb-1">日付フォーマット (通常モード用)</label>
+                <select id="datePatternSelect" class="w-full p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm bg-white mb-2">
+                    <option value="_yyyy.m.d">標準 (_yyyy.m.d)</option>
+                    <option value="_yyyy-mm-dd">ハイフン区切り (_yyyy-mm-dd)</option>
+                    <option value="_yyyymmdd">区切りなし (_yyyymmdd)</option>
+                    <option value="none">なし (日付をつけない)</option>
+                    <option value="custom">自由入力 (カスタム)</option>
+                </select>
+                
+                <div id="customDateContainer" class="hidden">
+                    <input type="text" id="customDateInput" placeholder="例: _yyyy年m月d日" class="w-full p-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-sm">
+                </div>
+                <div class="mt-2 text-sm text-slate-600">
+                    プレビュー: <span id="datePreview" class="font-mono bg-slate-100 px-2 py-0.5 rounded">_2024.1.1.pdf</span>
+                </div>
+            </div>
+
+            <div class="flex justify-end">
+                <button id="saveSettingsBtn" class="bg-primary text-white px-6 py-2 rounded-lg hover:bg-indigo-600 transition font-medium shadow-sm">
+                    設定を保存
+                </button>
+            </div>
+        </div>
+
+        <!-- Drop Zone -->
+        <div id="dropZone" class="drop-zone bg-white rounded-2xl p-10 text-center cursor-pointer mb-8 relative group">
+            <input type="file" id="fileInput" accept="application/pdf" multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+            <div class="pointer-events-none">
+                <i class="fa-solid fa-cloud-arrow-up text-5xl text-indigo-300 mb-4 group-hover:text-primary transition-colors"></i>
+                <h2 class="text-xl font-bold mb-2 text-slate-700">PDFをここにドロップ</h2>
+                <p class="text-slate-500 text-sm">複数ファイル対応 / 画像PDFもAI解析</p>
+            </div>
+        </div>
+
+        <!-- File List -->
+        <div id="fileList" class="space-y-4">
+            <!-- Items will be injected here -->
+        </div>
+
+    </main>
+
+    <!-- Templates -->
+    <template id="fileItemTemplate">
+        <div class="file-item bg-white p-4 rounded-xl shadow-sm border border-slate-100 flex flex-col sm:flex-row gap-4 items-start sm:items-center animate-fade-in group">
+            <!-- Icon -->
+            <div class="w-12 h-12 bg-red-50 rounded-lg flex items-center justify-center flex-shrink-0 text-red-500 relative">
+                <i class="fa-solid fa-file-pdf text-2xl"></i>
+                <div class="loading-spinner absolute inset-0 bg-white/80 rounded-lg flex items-center justify-center hidden">
+                     <i class="fa-solid fa-circle-notch fa-spin text-primary"></i>
+                </div>
+            </div>
+            
+            <!-- Content -->
+            <div class="flex-grow w-full overflow-hidden">
+                <div class="original-name text-xs text-slate-400 mb-1 truncate">original.pdf</div>
+                
+                <!-- Editing Mode -->
+                <div class="input-group flex gap-2 w-full items-baseline flex-wrap">
+                    <input type="text" class="title-input flex-grow font-bold text-slate-800 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-primary focus:outline-none px-1 py-0.5 transition-colors min-w-0" value="Loading...">
+                    <span class="date-suffix text-slate-400 font-mono text-sm whitespace-nowrap">_2024.1.1.pdf</span>
+                </div>
+                
+                <!-- Metadata Badges (Contract Mode) -->
+                <div class="contract-info mt-2 hidden">
+                    <span class="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 ring-1 ring-inset ring-indigo-700/10">
+                        <i class="fa-solid fa-building"></i> <span class="company-name">自社名: 取得中...</span>
+                    </span>
+                </div>
+
+                <!-- Status/Error Msg -->
+                <div class="status-msg text-xs text-amber-600 mt-1 hidden flex items-center gap-1">
+                    <i class="fa-solid fa-circle-info"></i> <span></span>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div class="flex gap-2 flex-shrink-0 w-full sm:w-auto justify-end">
+                <button class="regenerate-btn p-2 text-slate-400 hover:text-primary rounded-lg hover:bg-slate-50 transition" title="AIで再生成">
+                    <i class="fa-solid fa-rotate"></i>
+                </button>
+                <button class="download-btn bg-slate-800 text-white px-4 py-2 rounded-lg hover:bg-slate-700 transition flex items-center gap-2 shadow-sm font-medium whitespace-nowrap">
+                    <i class="fa-solid fa-download"></i> 保存
+                </button>
+            </div>
+        </div>
+    </template>
+
+    <script>
+        // PDF.js Setup
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        // --- Configuration Constants ---
+        const CONFIG_KEY_API = 'gemini_api_key_pdf_renamer';
+        const CONFIG_KEY_PROVIDER = 'gemini_provider_pdf_renamer';
+        const CONFIG_KEY_MODEL = 'gemini_model_id_pdf_renamer';
+        const CONFIG_KEY_DATE_PATTERN = 'gemini_date_pattern_pdf_renamer';
+        const CONFIG_KEY_CUSTOM_DATE = 'gemini_custom_date_pdf_renamer';
+        const CONFIG_KEY_CONTRACT_MODE = 'gemini_contract_mode_pdf_renamer';
+
+        // Provider & Model Definitions
+        const PROVIDERS = {
+            google: {
+                label: 'Google Gemini (Direct)',
+                keyLabel: 'Google Gemini API Key',
+                keyPlaceholder: 'AIza...',
+                keyHelp: 'Google AI Studioで取得したキーを入力してください。',
+                models: {
+                    'gemini-2.0-flash': { name: 'Gemini 2.0 Flash', desc: '現在利用可能な最新の標準モデル。', priceInput: 0.10, priceOutput: 0.40 },
+                    'gemini-2.0-flash-lite-preview-02-05': { name: 'Gemini 2.0 Flash-Lite', desc: '軽量・高速な最新プレビューモデル。', priceInput: 0.075, priceOutput: 0.30 },
+                    'gemini-1.5-flash': { name: 'Gemini 1.5 Flash', desc: '安定版の高速モデル。', priceInput: 0.075, priceOutput: 0.30 },
+                    'gemini-1.5-flash-8b': { name: 'Gemini 1.5 Flash-8B', desc: '超軽量・最安モデル。', priceInput: 0.0375, priceOutput: 0.15 },
+                    'gemini-1.5-pro': { name: 'Gemini 1.5 Pro', desc: '高精度モデル。', priceInput: 3.50, priceOutput: 10.50 }
+                }
+            },
+            openrouter: {
+                label: 'OpenRouter',
+                keyLabel: 'OpenRouter API Key',
+                keyPlaceholder: 'sk-or-v1-...',
+                keyHelp: 'OpenRouterのダッシュボードから取得したキーを入力してください。',
+                models: {
+                    'google/gemini-3-flash-preview': { name: 'Google: Gemini 3 Flash Preview', desc: '最新のGemini 3 Flash。高速・高性能で推論機能付き。', priceInput: 0.50, priceOutput: 3.00 },
+                    'google/gemini-2.0-flash-001': { name: 'Google: Gemini 2.0 Flash', desc: 'Gemini 2.0 Flashの安定版。', priceInput: 0.10, priceOutput: 0.40 },
+                    'google/gemini-flash-1.5': { name: 'Google: Gemini 1.5 Flash', desc: '標準的なGemini Flashモデル。', priceInput: 0.075, priceOutput: 0.30 },
+                    'google/gemini-flash-1.5-8b': { name: 'Google: Gemini 1.5 Flash-8B', desc: '超高速・低コストモデル。', priceInput: 0.0375, priceOutput: 0.15 },
+                    'openai/gpt-4o-mini': { name: 'OpenAI: GPT-4o mini', desc: 'OpenAIの高速・安価なモデル。', priceInput: 0.15, priceOutput: 0.60 },
+                    'anthropic/claude-3.5-haiku': { name: 'Anthropic: Claude 3.5 Haiku', desc: 'Anthropicの最新高速モデル。', priceInput: 0.80, priceOutput: 4.00 }
+                }
+            }
+        };
+
+        // State - Default to OpenRouter with Gemini 3 Flash
+        let currentProvider = localStorage.getItem(CONFIG_KEY_PROVIDER) || 'openrouter';
+        let currentModelId = localStorage.getItem(CONFIG_KEY_MODEL) || 'google/gemini-3-flash-preview';
+        let isContractMode = localStorage.getItem(CONFIG_KEY_CONTRACT_MODE) === 'true';
+        
+        let currentDatePattern = localStorage.getItem(CONFIG_KEY_DATE_PATTERN) || '_yyyy.m.d';
+        let currentCustomDate = localStorage.getItem(CONFIG_KEY_CUSTOM_DATE) || '_yyyy-mm-dd';
+
+        // Validating Model Selection & Defaulting
+        if (!currentModelId || !PROVIDERS[currentProvider].models[currentModelId]) {
+            currentModelId = Object.keys(PROVIDERS[currentProvider].models)[0];
+        }
+
+        // DOM Elements
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const settingsBtn = document.getElementById('settingsBtn');
+        const settingsPanel = document.getElementById('settingsPanel');
+        const apiKeyInput = document.getElementById('apiKeyInput');
+        const apiKeyLabel = document.getElementById('apiKeyLabel');
+        const apiKeyHelp = document.getElementById('apiKeyHelp');
+        const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+        const downloadAllBtn = document.getElementById('downloadAllBtn');
+        const costDisplay = document.getElementById('costDisplay');
+        const modelSelect = document.getElementById('modelSelect');
+        const modelDescription = document.getElementById('modelDescription');
+        const providerRadios = document.querySelectorAll('input[name="apiProvider"]');
+        const globalDatePicker = document.getElementById('globalDatePicker');
+        const contractModeCheck = document.getElementById('contractModeCheck');
+        const datePatternSelect = document.getElementById('datePatternSelect');
+        const customDateContainer = document.getElementById('customDateContainer');
+        const customDateInput = document.getElementById('customDateInput');
+        const datePreview = document.getElementById('datePreview');
+
+        // Initial UI Setup
+        const savedKey = localStorage.getItem(CONFIG_KEY_API);
+        if (savedKey) apiKeyInput.value = savedKey;
+        if (!savedKey) settingsPanel.classList.remove('hidden');
+
+        document.querySelector(`input[name="apiProvider"][value="${currentProvider}"]`).checked = true;
+        contractModeCheck.checked = isContractMode;
+
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        globalDatePicker.value = `${yyyy}-${mm}-${dd}`;
+
+        datePatternSelect.value = currentDatePattern;
+        customDateInput.value = currentCustomDate;
+        updateDateSettingsUI();
+
+        updateSettingsUI();
+
+        let totalCostJPY = 0.0;
+
+        // --- Helper: Reliable Download ---
+        function triggerDownload(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+        }
+
+        function downloadFile(file, filename) {
+            triggerDownload(file, filename);
+        }
+
+        // --- Date Formatter ---
+        function getFormattedDate(pattern = currentDatePattern, custom = currentCustomDate) {
+            if (isContractMode) return '';
+            if (pattern === 'none') return '';
+            
+            const pickerVal = globalDatePicker.value;
+            if (!pickerVal) return '';
+
+            const [yStr, mStr, dStr] = pickerVal.split('-');
+            const yyyy = yStr;
+            const m = parseInt(mStr, 10);
+            const mm = mStr;
+            const d = parseInt(dStr, 10);
+            const dd = dStr;
+
+            let format = pattern;
+            if (pattern === 'custom') {
+                format = custom;
+            }
+
+            return format
+                .replace(/yyyy/g, yyyy)
+                .replace(/mm/g, mm)
+                .replace(/dd/g, dd)
+                .replace(/m/g, m)
+                .replace(/d/g, d);
+        }
+
+        function updateDateSettingsUI() {
+            const val = datePatternSelect.value;
+            if (val === 'custom') {
+                customDateContainer.classList.remove('hidden');
+            } else {
+                customDateContainer.classList.add('hidden');
+            }
+            
+            const previewText = getFormattedDate(val, customDateInput.value) || '(なし)';
+            datePreview.textContent = previewText + '.pdf';
+        }
+
+        function updateAllFileSuffixes() {
+            const items = document.querySelectorAll('.file-item');
+            const currentSuffix = getFormattedDate();
+            
+            items.forEach(item => {
+                const suffixEl = item.querySelector('.date-suffix');
+                suffixEl.textContent = currentSuffix ? `${currentSuffix}.pdf` : '.pdf';
+            });
+        }
+
+        // --- Event Listeners ---
+
+        window.addEventListener('beforeunload', (e) => {
+            const items = document.querySelectorAll('.file-item');
+            if (items.length > 0) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
+        });
+
+        settingsBtn.addEventListener('click', () => {
+            settingsPanel.classList.toggle('hidden');
+        });
+
+        globalDatePicker.addEventListener('change', () => {
+            updateAllFileSuffixes();
+            if (!settingsPanel.classList.contains('hidden')) {
+                updateDateSettingsUI();
+            }
+        });
+
+        providerRadios.forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                currentProvider = e.target.value;
+                updateSettingsUI();
+            });
+        });
+
+        datePatternSelect.addEventListener('change', updateDateSettingsUI);
+        customDateInput.addEventListener('input', updateDateSettingsUI);
+
+        function updateSettingsUI() {
+            const config = PROVIDERS[currentProvider];
+            
+            apiKeyLabel.textContent = config.keyLabel;
+            apiKeyInput.placeholder = config.keyPlaceholder;
+            apiKeyHelp.textContent = config.keyHelp;
+
+            modelSelect.innerHTML = '';
+            const models = config.models;
+            let firstModel = null;
+            
+            Object.keys(models).forEach((key, index) => {
+                if (index === 0) firstModel = key;
+                const option = document.createElement('option');
+                option.value = key;
+                option.textContent = models[key].name;
+                modelSelect.appendChild(option);
+            });
+
+            // If current model exists in new provider/list, select it. Else pick first.
+            if (models[currentModelId]) {
+                modelSelect.value = currentModelId;
+            } else {
+                modelSelect.value = firstModel;
+                currentModelId = firstModel;
+            }
+            updateModelDescription();
+        }
+
+        modelSelect.addEventListener('change', (e) => {
+            currentModelId = e.target.value;
+            updateModelDescription();
+        });
+
+        function updateModelDescription() {
+            const models = PROVIDERS[currentProvider].models;
+            const info = models[currentModelId];
+            if (!info) return;
+
+            modelDescription.textContent = info.desc;
+            if (info.priceInput > 1.0) {
+                modelDescription.classList.add('text-amber-600', 'font-bold');
+            } else {
+                modelDescription.classList.remove('text-amber-600', 'font-bold');
+            }
+        }
+
+        saveSettingsBtn.addEventListener('click', () => {
+            const key = apiKeyInput.value.trim();
+            const model = modelSelect.value;
+            const datePattern = datePatternSelect.value;
+            const customDate = customDateInput.value;
+            const contractMode = contractModeCheck.checked;
+            
+            if (key) {
+                localStorage.setItem(CONFIG_KEY_API, key);
+                localStorage.setItem(CONFIG_KEY_PROVIDER, currentProvider);
+                localStorage.setItem(CONFIG_KEY_MODEL, model);
+                localStorage.setItem(CONFIG_KEY_DATE_PATTERN, datePattern);
+                localStorage.setItem(CONFIG_KEY_CUSTOM_DATE, customDate);
+                localStorage.setItem(CONFIG_KEY_CONTRACT_MODE, contractMode);
+                
+                currentModelId = model;
+                currentDatePattern = datePattern;
+                currentCustomDate = customDate;
+                isContractMode = contractMode;
+                
+                updateAllFileSuffixes();
+
+                settingsPanel.classList.add('hidden');
+                
+                let modeMsg = isContractMode ? "\nモード: 契約書モード (ON)" : "\nモード: 通常 (OFF)";
+                alert(`設定を保存しました。${modeMsg}`);
+            } else {
+                alert('APIキーを入力してください');
+            }
+        });
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+            fileInput.value = '';
+        });
+
+        window.addEventListener('paste', (e) => {
+            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+            const files = [];
+            for (let item of items) {
+                if (item.kind === 'file' && item.type === 'application/pdf') {
+                    files.push(item.getAsFile());
+                }
+            }
+            if (files.length > 0) {
+                handleFiles(files);
+            }
+        });
+
+        // Download All (ZIP)
+        downloadAllBtn.addEventListener('click', async () => {
+            const items = document.querySelectorAll('.file-item');
+            if (items.length === 0) return;
+
+            const zip = new JSZip();
+            let count = 0;
+
+            items.forEach((item) => {
+                const titleInput = item.querySelector('.title-input');
+                const dateSuffix = item.querySelector('.date-suffix').textContent;
+                const file = item.fileRef;
+                
+                if (file && !titleInput.disabled) {
+                    const filename = `${titleInput.value.trim() || 'untitled'}${dateSuffix}`;
+                    
+                    const companyName = item.dataset.company;
+                    if (companyName) {
+                        zip.folder(companyName).file(filename, file);
+                    } else {
+                        zip.file(filename, file);
+                    }
+                    count++;
+                }
+            });
+
+            if (count > 0) {
+                const content = await zip.generateAsync({type:"blob"});
+                const dateStr = getFormattedDate() || '_archived';
+                triggerDownload(content, `renamed_files${dateStr}.zip`);
+            }
+        });
+
+        // --- Core Logic ---
+
+        function handleFiles(files) {
+            Array.from(files).forEach(file => {
+                if (file.type !== 'application/pdf') return;
+                processFile(file);
+            });
+            updateDownloadAllButton();
+        }
+
+        function updateDownloadAllButton() {
+            const items = document.querySelectorAll('.file-item');
+            if (items.length > 1) {
+                downloadAllBtn.classList.remove('hidden');
+            } else {
+                downloadAllBtn.classList.add('hidden');
+            }
+        }
+
+        async function processFile(file) {
+            const template = document.getElementById('fileItemTemplate');
+            const clone = template.content.cloneNode(true);
+            const container = clone.querySelector('.file-item');
+            
+            container.fileRef = file;
+
+            const originalNameEl = container.querySelector('.original-name');
+            const titleInput = container.querySelector('.title-input');
+            const dateSuffixEl = container.querySelector('.date-suffix');
+            const statusMsg = container.querySelector('.status-msg');
+            const statusText = statusMsg.querySelector('span');
+            const downloadBtn = container.querySelector('.download-btn');
+            const regenerateBtn = container.querySelector('.regenerate-btn');
+            const spinner = container.querySelector('.loading-spinner');
+            const contractInfo = container.querySelector('.contract-info');
+            const companyNameEl = container.querySelector('.company-name');
+
+            originalNameEl.textContent = file.name;
+            const suffix = getFormattedDate();
+            dateSuffixEl.textContent = suffix ? `${suffix}.pdf` : '.pdf';
+            
+            titleInput.value = "解析中...";
+            titleInput.disabled = true;
+            downloadBtn.disabled = true;
+            downloadBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            spinner.classList.remove('hidden');
+
+            fileList.prepend(container);
+            updateDownloadAllButton();
+
+            let extractedData = null; 
+            let isImageMode = false;
+
+            try {
+                let text = "";
+                try {
+                    text = await extractTextFromPDF(file);
+                } catch (e) { console.warn("Text extraction failed", e); }
+                
+                const cleanText = text.replace(/\s/g, '');
+                
+                if (cleanText.length > 10) {
+                    extractedData = { type: 'text', content: text };
+                } else {
+                    isImageMode = true;
+                    statusText.textContent = "テキスト不明瞭: 画像解析中...";
+                    statusMsg.classList.remove('hidden');
+                    
+                    try {
+                        const base64Image = await renderPageAsImage(file);
+                        extractedData = { type: 'image', content: base64Image };
+                    } catch (imgError) {
+                        console.error("Image rendering failed", imgError);
+                        throw new Error("PDFの画像化に失敗しました");
+                    }
+                }
+
+                const apiKey = localStorage.getItem(CONFIG_KEY_API);
+                const provider = localStorage.getItem(CONFIG_KEY_PROVIDER) || 'openrouter';
+                let suggestedTitle = file.name.replace(/\.pdf$/i, ''); 
+
+                if (apiKey && extractedData) {
+                    try {
+                        const rawResponse = await generateTitle(apiKey, provider, currentModelId, extractedData);
+                        
+                        if (isContractMode) {
+                            const parts = rawResponse.split('|');
+                            suggestedTitle = parts[0].trim();
+                            const company = parts.length > 1 ? parts[1].trim() : "不明";
+                            
+                            companyNameEl.textContent = `自社名: ${company}`;
+                            container.dataset.company = company;
+                            contractInfo.classList.remove('hidden');
+                        } else {
+                            suggestedTitle = rawResponse;
+                            delete container.dataset.company; 
+                            contractInfo.classList.add('hidden');
+                        }
+                        
+                        const modelName = PROVIDERS[provider].models[currentModelId]?.name || currentModelId;
+                        let statusNote = isContractMode ? "(契約書モード)" : "";
+                        if (isImageMode) {
+                            statusText.textContent = `画像認識完了 ${statusNote} (${modelName})`;
+                        } else if (isContractMode) {
+                            statusText.textContent = `契約書解析完了 (${modelName})`;
+                        }
+                        
+                        statusMsg.classList.remove('hidden');
+
+                    } catch (aiError) {
+                        console.error(aiError);
+                        statusText.textContent = "AI解析エラー: 元の名前を使用";
+                        statusMsg.classList.remove('hidden');
+                    }
+                } else if (!apiKey) {
+                    statusText.textContent = "APIキー未設定";
+                    statusMsg.classList.remove('hidden');
+                }
+
+                titleInput.value = suggestedTitle;
+                titleInput.disabled = false;
+                downloadBtn.disabled = false;
+                downloadBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                spinner.classList.add('hidden');
+
+                regenerateBtn.onclick = async () => {
+                    const key = localStorage.getItem(CONFIG_KEY_API);
+                    const prov = localStorage.getItem(CONFIG_KEY_PROVIDER) || 'openrouter';
+                    if (!key) {
+                        alert("設定からAPIキーを入力してください");
+                        return;
+                    }
+                    
+                    spinner.classList.remove('hidden');
+                    titleInput.disabled = true;
+                    
+                    try {
+                        const rawNewResponse = await generateTitle(key, prov, currentModelId, extractedData);
+                        
+                        if (isContractMode) {
+                            const parts = rawNewResponse.split('|');
+                            titleInput.value = parts[0].trim();
+                            const company = parts.length > 1 ? parts[1].trim() : "不明";
+                            companyNameEl.textContent = `自社名: ${company}`;
+                            container.dataset.company = company; 
+                            contractInfo.classList.remove('hidden');
+                        } else {
+                            titleInput.value = rawNewResponse;
+                            delete container.dataset.company;
+                            contractInfo.classList.add('hidden');
+                        }
+
+                    } catch (e) {
+                        alert("生成に失敗しました");
+                    } finally {
+                        spinner.classList.add('hidden');
+                        titleInput.disabled = false;
+                    }
+                };
+
+                downloadBtn.onclick = () => {
+                    const finalTitle = titleInput.value.trim() || "untitled";
+                    const currentSuffix = getFormattedDate();
+                    const ext = currentSuffix ? `${currentSuffix}.pdf` : '.pdf';
+                    const filename = `${finalTitle}${ext}`;
+                    downloadFile(file, filename);
+                };
+
+            } catch (error) {
+                console.error(error);
+                titleInput.value = file.name.replace(/\.pdf$/i, '');
+                statusText.textContent = "解析失敗: 元の名前を使用";
+                statusMsg.classList.remove('hidden');
+                titleInput.disabled = false;
+                downloadBtn.disabled = false;
+                downloadBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                spinner.classList.add('hidden');
+            }
+        }
+
+        // --- PDF Processing ---
+
+        async function extractTextFromPDF(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            
+            let fullText = "";
+            const maxPages = Math.min(pdf.numPages, 3); // Check first 3 pages for contracts
+            
+            for (let i = 1; i <= maxPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map(item => item.str).join(' ');
+                fullText += pageText + "\n";
+            }
+            return fullText.trim();
+        }
+
+        async function renderPageAsImage(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            const page = await pdf.getPage(1); 
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            await page.render({ canvasContext: context, viewport: viewport }).promise;
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            return dataUrl.split(',')[1];
+        }
+
+        // --- Unified API & Cost Logic ---
+
+        function updateCostDisplay(inputTokens, outputTokens, provider, modelId) {
+            const providerConfig = PROVIDERS[provider];
+            const model = (providerConfig && providerConfig.models[modelId]) 
+                ? providerConfig.models[modelId] 
+                : { priceInput: 0, priceOutput: 0, name: 'Unknown' };
+            
+            const usdToJpy = 150; 
+
+            const inputCostUSD = (inputTokens / 1000000) * model.priceInput;
+            const outputCostUSD = (outputTokens / 1000000) * model.priceOutput;
+            
+            const costJPY = (inputCostUSD + outputCostUSD) * usdToJpy;
+            totalCostJPY += costJPY;
+            
+            costDisplay.textContent = `概算コスト: ${totalCostJPY.toFixed(3)}円`;
+            costDisplay.title = `モデル: ${model.name}\nInput: ${inputTokens}t / Output: ${outputTokens}t`;
+        }
+
+        async function generateTitle(apiKey, provider, modelId, inputData) {
+            const systemPrompt = createSystemPrompt();
+            
+            if (provider === 'google') {
+                return generateTitleGoogle(apiKey, modelId, inputData, systemPrompt);
+            } else if (provider === 'openrouter') {
+                return generateTitleOpenRouter(apiKey, modelId, inputData, systemPrompt);
+            } else {
+                throw new Error("Unknown provider");
+            }
+        }
+
+        function createSystemPrompt() {
+            if (isContractMode) {
+                return `
+                あなたは契約書管理のアシスタントです。
+                提供された文書（テキストまたは画像）から以下の情報を抽出し、ファイル名と自社名を生成してください。
+                
+                出力フォーマット: {相手の会社名}_{契約書名}_{契約日}|{自社名}
+                ※必ず「|」で区切って出力してください。
+                
+                抽出ルール:
+                1. {相手の会社名}: 契約相手の正式名称（株式会社なども略さない）。
+                2. {契約書名}: 文書のタイトル（例: 取引基本契約書、秘密保持契約書）。
+                3. {契約日}: 契約締結日。フォーマットは「yyyymmdd」（例: 20240131）。日付がない場合は「不明」としてください。
+                4. {自社名}: 文書内から以下の4社のいずれかであることを特定してください。
+                   リスト: [船昌, ファームステーション, GLOBALCARGO, f.dining]
+                   ※リスト内の企業が見つからない場合は「不明」としてください。
+                
+                出力例: 株式会社サンプル_取引基本契約書_20240131|船昌
+                
+                余計な説明は省き、上記フォーマットの文字列のみを出力してください。
+                `;
+            } else {
+                return `
+                あなたはファイル整理のアシスタントです。
+                提供されたPDFの内容（テキストまたは画像）に基づいて、ファイル名として最適な「簡潔なタイトル」を日本語で生成してください。
+                制約事項: 
+                - 拡張子は含めない。
+                - 日付は含めない（アプリ側で付与するため）。
+                - スペースやファイル名に使用できない特殊文字（/ : * ? " < > |）は除外。
+                - アンダースコア(_)は使用可能。
+                出力: タイトルのみ。
+                `;
+            }
+        }
+
+        async function generateTitleGoogle(apiKey, modelId, inputData, systemPrompt) {
+            const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
+            
+            let contentsPart = [];
+
+            if (inputData.type === 'text') {
+                contentsPart = [{ text: systemPrompt + "\n\nテキスト内容:\n" + inputData.content.substring(0, 5000) }];
+            } else {
+                contentsPart = [
+                    { text: systemPrompt },
+                    { 
+                        inlineData: { 
+                            mimeType: "image/jpeg", 
+                            data: inputData.content 
+                        } 
+                    }
+                ];
+            }
+
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: contentsPart }] })
+            });
+
+            if (!response.ok) {
+                const errData = await response.json();
+                console.error("Gemini API Error:", errData);
+                throw new Error('API request failed');
+            }
+
+            const data = await response.json();
+            let title = data.candidates[0].content.parts[0].text.trim();
+            
+            if (data.usageMetadata) {
+                const inputTokens = data.usageMetadata.promptTokenCount || 0;
+                const outputTokens = data.usageMetadata.candidatesTokenCount || 0;
+                updateCostDisplay(inputTokens, outputTokens, 'google', modelId);
+            }
+
+            return cleanTitle(title);
+        }
+
+        async function generateTitleOpenRouter(apiKey, modelId, inputData, systemPrompt) {
+            const endpoint = "https://openrouter.ai/api/v1/chat/completions";
+            
+            let messages = [
+                { role: "system", content: systemPrompt }
+            ];
+
+            if (inputData.type === 'text') {
+                messages.push({ 
+                    role: "user", 
+                    content: "テキスト内容:\n" + inputData.content.substring(0, 5000) 
+                });
+            } else {
+                messages.push({
+                    role: "user",
+                    content: [
+                        { type: "text", text: "この画像（PDFの1ページ目）の内容から適切なタイトルを生成してください。" },
+                        { 
+                            type: "image_url", 
+                            image_url: { 
+                                url: `data:image/jpeg;base64,${inputData.content}` 
+                            } 
+                        }
+                    ]
+                });
+            }
+
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${apiKey}`,
+                    'HTTP-Referer': window.location.href, 
+                    'X-Title': 'PDF Renamer AI' 
+                },
+                body: JSON.stringify({
+                    model: modelId,
+                    messages: messages
+                })
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                console.error("OpenRouter API Error:", errText);
+                throw new Error('OpenRouter API request failed');
+            }
+
+            const data = await response.json();
+            let title = data.choices[0].message.content.trim();
+
+            if (data.usage) {
+                const inputTokens = data.usage.prompt_tokens || 0;
+                const outputTokens = data.usage.completion_tokens || 0;
+                updateCostDisplay(inputTokens, outputTokens, 'openrouter', modelId);
+            }
+
+            return cleanTitle(title);
+        }
+
+        function cleanTitle(title) {
+            let clean = title.replace(/^```[\s\S]*?\n/g, '').replace(/```$/g, '');
+            clean = clean.replace(/[\\/:*?"<>]/g, ''); 
+            clean = clean.replace(/\n/g, '');
+            clean = clean.replace(/\s/g, '_');
+            return clean;
+        }
+
+    </script>
+</body>
+</html>
