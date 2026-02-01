@@ -1,0 +1,11 @@
+{
+  "name": "ai-pdf-renamer",
+  "version": "1.0.0",
+  "description": "AI PDF Renamer using OpenRouter + Gemini 3 Flash",
+  "scripts": {
+    "build": "echo 'No build needed - static HTML'"
+  },
+  "keywords": ["pdf", "ai", "gemini"],
+  "author": "",
+  "license": "MIT"
+}
